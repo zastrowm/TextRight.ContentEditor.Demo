@@ -5,6 +5,7 @@ var TextRight;
         var Internal;
         (function (Internal) {
             var StringUtils = TextRight.Utils.StringUtils;
+            var EventHandlers = TextRight.Internal.EventHandlers;
             /**
              * Processes key and mouse events, forwarding various events to the provided
              * handler
@@ -21,13 +22,13 @@ var TextRight;
                     this.lastInput = "";
                     this.isPasteIncoming = false;
                     this.isCutIncoming = false;
-                    this.isMouseDown = false;
                     if (element == null)
                         throw "Not a valid element";
-                    documentElement.addEventListener("mousedown", function (evt) { return _this.handleMouseDown(evt); });
-                    documentElement.addEventListener("mousemove", function (evt) { return _this.handleMouseMove(evt); });
-                    documentElement.addEventListener("mouseup", function (evt) { return _this.handleMouseUp(evt); });
-                    element.addEventListener("keydown", function (evt) { return _this.handleKeyDown(evt); });
+                    this.mouseDown = EventHandlers.from(documentElement, "mousedown", function (evt) { return _this.handleMouseDown(evt); }, true);
+                    this.mouseMove = EventHandlers.from(documentElement, "mousemove", function (evt) { return _this.handleMouseMove(evt); });
+                    this.mouseUp = EventHandlers.fromMany([documentElement, window], "mouseup", function (evt) { return _this.handleMouseUp(evt); });
+                    EventHandlers.from(element, "keydown", function (evt) { return _this.handleKeyDown(evt); }, true);
+                    // TODO reduce interval when we can (exponential back off?)
                     setInterval(function () { return _this.readInput(); }, 50);
                 }
                 DocumentInputProcessor.prototype.readInput = function () {
@@ -66,29 +67,30 @@ var TextRight;
                     this.isCutIncoming = false;
                     return true;
                 };
+                /* Handle the case where the user is selecting text */
                 DocumentInputProcessor.prototype.handleMouseDown = function (evt) {
                     if (evt.button !== 0)
                         return;
                     evt.preventDefault();
-                    this.isMouseDown = true;
                     var shouldExtendSelections = evt.shiftKey;
-                    this.handler.handleLeftMouseDown(evt.clientX, evt.clientY, shouldExtendSelections);
+                    this.handler.setCaret(evt.pageX, evt.pageY, shouldExtendSelections);
+                    this.mouseMove.enable();
+                    this.mouseUp.enable();
                 };
+                /* Handle the case where the user is selecting text */
                 DocumentInputProcessor.prototype.handleMouseMove = function (evt) {
-                    if (!this.isMouseDown)
-                        return;
                     if (evt.button !== 0)
                         return;
                     evt.preventDefault();
-                    this.handler.handleLeftMouseMove(evt.clientX, evt.clientY);
+                    this.handler.setCaret(evt.pageX, evt.pageY, true);
                 };
+                /* Handle the case where the user stopped the selection */
                 DocumentInputProcessor.prototype.handleMouseUp = function (evt) {
-                    if (!this.isMouseDown)
-                        return;
                     if (evt.button !== 0)
                         return;
-                    this.isMouseDown = false;
                     evt.preventDefault();
+                    this.mouseMove.disable();
+                    this.mouseUp.disable();
                 };
                 /** Handle the case where the user pressed a key down. */
                 DocumentInputProcessor.prototype.handleKeyDown = function (evt) {

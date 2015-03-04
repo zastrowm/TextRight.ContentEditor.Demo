@@ -15,6 +15,35 @@ var TextRight;
                     this.containerElement = containerElement;
                 }
                 /**
+                 * Check if the given element represents a block
+                 */
+                BlockItem.isBlock = function (element) {
+                    return element.nodeName === "BLOCK";
+                };
+                /**
+                 * Check if the given element represents the content of a block (aka the
+                 * paragraph in the block)
+                 */
+                BlockItem.isBlockContent = function (element) {
+                    if (element.nodeName !== "P")
+                        return false;
+                    return this.isBlock(element.parentNode);
+                };
+                /**
+                 * Check if the given element represents a span within a block
+                 */
+                BlockItem.isSpan = function (element) {
+                    // TODO not all spans are spans within a block
+                    return element.nodeName === "SPAN";
+                };
+                /**
+                 * Get a block item that represents the block that the given span is contained within
+                 */
+                BlockItem.blockFromSpan = function (element) {
+                    // TODO more error checking
+                    return new BlockItem(element.parentNode.parentNode);
+                };
+                /**
                  * Create a new block that can be inserted into he document
                  */
                 BlockItem.createNewBlock = function () {

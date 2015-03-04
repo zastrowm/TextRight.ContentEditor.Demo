@@ -126,11 +126,11 @@ var TextRight;
                 DocumentCursor.prototype.getCursorPosition = function () {
                     if (this.isBeginningOfBlock) {
                         // the only thing we have a position of is the first span
-                        return Internal.PointPosition.rightOf(this.previousSpan.getBoundingClientRect());
+                        return DocumentCursor.rightOf(HtmlUtils.getBoundingClientRectOfElement(this.previousSpan));
                     }
                     if (this.isEndOfBlock) {
                         // we don't have a nextNode so the block below will not work
-                        return Internal.PointPosition.rightOf(HtmlUtils.getBoundingClientRectOf(this.textNode));
+                        return DocumentCursor.rightOf(HtmlUtils.getBoundingClientRectOf(this.textNode));
                     }
                     var rect = HtmlUtils.getBoundingClientRectOf(this.textNode);
                     var nextRect = HtmlUtils.getBoundingClientRectOf(this.nextNode);
@@ -141,12 +141,24 @@ var TextRight;
                         // when we're at the end of "virtual" line in the paragraph, and we have a
                         // space character. The position of the next character is actually on
                         // the next line, and so we re-position the cursor there
-                        point = Internal.PointPosition.leftOf(nextRect);
+                        point = DocumentCursor.leftOf(nextRect);
                     }
                     else {
-                        point = Internal.PointPosition.rightOf(rect);
+                        point = DocumentCursor.rightOf(rect);
                     }
                     return point;
+                };
+                /**
+                 * Create a position which looks at the right side of the given client rectangle.
+                 */
+                DocumentCursor.rightOf = function (rect) {
+                    return new Internal.Rect(rect.top, rect.right, rect.height, 0);
+                };
+                /**
+                * Create a position which looks at the left side of the given client rectangle.
+                */
+                DocumentCursor.leftOf = function (rect) {
+                    return new Internal.Rect(rect.top, rect.left, rect.height, 0);
                 };
                 /* Add the given element at the cursor position, after the next element. */
                 DocumentCursor.prototype.add = function (element) {

@@ -6,6 +6,8 @@ var TextRight;
         (function (Internal) {
             var HtmlUtils = TextRight.Utils.HtmlUtils;
             var MathUtils = TextRight.Utils.MathUtils;
+            var carriageReturn = "\r";
+            var newline = "\n";
             var DocumentModel = (function () {
                 /**
                  * Create a new editable document from a div element
@@ -16,6 +18,7 @@ var TextRight;
                  */
                 function DocumentModel(element) {
                     this.element = element;
+                    this.cache = new Internal.DocumentCache(this);
                     // we're gonna put the text back later
                     var text = element.textContent;
                     // make sure the element is empty
@@ -25,28 +28,9 @@ var TextRight;
                     // fake block to insert the first block
                     var first = new Internal.BlockItem(element.children[0]);
                     var block = Internal.BlockItem.createNewBlock();
-                    Internal.EditDocument.insertBlockAfter(first, block);
-                    Internal.EditDocument.insertText(block.beginning, text);
-                    this.undoStack = new UndoStack();
+                    this.insertBlockAfter(first, block);
+                    this.insertText(block.beginning, text);
                 }
-                /**
-                 * Get the offset between getBoundingClientRect() and the top of the element.  This is
-                 * used primarily for anything that calls getBoundingClientRect() and needs to position
-                 * things accordingly. getBoundingClientRect() returns client coordinates while
-                 * absolutely positioned items need page offset.  So by adding the offset acquired by
-                 * this method, you can translate your client rect to a page rect.
-                 * @return The offset between client coordinates and page coordinates.
-                 */
-                DocumentModel.prototype.getOffset = function () {
-                    var doc = this.element;
-                    var client = doc.getBoundingClientRect();
-                    var diffTop = doc.offsetTop - client.top;
-                    var diffLeft = doc.offsetLeft - client.left;
-                    return {
-                        left: diffLeft,
-                        top: diffTop
-                    };
-                };
                 Object.defineProperty(DocumentModel.prototype, "rawElement", {
                     /**
                      * The html div element that represents the top-level document container
@@ -77,37 +61,34 @@ var TextRight;
                     enumerable: true,
                     configurable: true
                 });
-                /**
-                 * Check if the given x/y coordinates are part of this document
-                 */
-                DocumentModel.prototype.isCoordinatesInsideDocument = function (x, y) {
-                    var rect = this.element.getBoundingClientRect();
-                    return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+                /** Returns true if the given block container is the last block in this document. */
+                DocumentModel.prototype.isLastBlockContainer = function (blockContainer) {
+                    return blockContainer.nextElementSibling == this.lastBlockIndicator;
                 };
                 /**
                  * Gets a cursor that represents the given x/y coordinates for this document
                  */
                 DocumentModel.prototype.getCursorFromLocation = function (x, y) {
-                    var rect = this.element.getBoundingClientRect();
+                    var rect = HtmlUtils.getBoundingClientRectOfElement(this.element);
                     // clamp it inside the document bounds... 
                     x = MathUtils.clamp(x, rect.left, rect.right);
                     y = MathUtils.clamp(y, rect.top, rect.bottom);
-                    var element = document.elementFromPoint(x, y);
-                    if (Internal.EditDocument.isSpan(element)) {
+                    var element = document.elementFromPoint(x - window.pageXOffset, y - pageYOffset);
+                    if (Internal.BlockItem.isSpan(element)) {
                         // search through to find the span
-                        var position = new Internal.DocumentCursor(Internal.EditDocument.blockFromSpan(element), element, element.firstChild);
+                        var position = new Internal.DocumentCursor(Internal.BlockItem.blockFromSpan(element), element, element.firstChild);
                         position.moveTowardsPosition(x, y);
                         return position;
                     }
-                    else if (Internal.EditDocument.isBlock(element) || Internal.EditDocument.isBlockContent(element)) {
-                        var blockElement = Internal.EditDocument.isBlock(element) ? element : element.parentNode;
+                    else if (Internal.BlockItem.isBlock(element) || Internal.BlockItem.isBlockContent(element)) {
+                        var blockElement = Internal.BlockItem.isBlock(element) ? element : element.parentNode;
                         var block = new Internal.BlockItem(blockElement);
                         return this.getCursorForPositionForBlock(x, y, block);
                     }
                     else {
                         var firstBlock = this.firstBlock;
-                        var beginPosition = this.firstBlock.containerElement.getBoundingClientRect().top;
-                        var endPosition = this.lastBlock.containerElement.getBoundingClientRect().bottom;
+                        var beginPosition = HtmlUtils.getBoundingClientRectOfElement(this.firstBlock.containerElement).top;
+                        var endPosition = HtmlUtils.getBoundingClientRectOfElement(this.lastBlock.containerElement).bottom;
                         if (y < beginPosition) {
                             return this.getCursorForPositionForBlock(x, y, this.firstBlock);
                         }
@@ -124,7 +105,7 @@ var TextRight;
                  * Get a cursor that represents a location close to the given x/y value within the block
                  */
                 DocumentModel.prototype.getCursorForPositionForBlock = function (x, y, block) {
-                    var contentRect = block.containerElement.getBoundingClientRect();
+                    var contentRect = HtmlUtils.getBoundingClientRectOfElement(block.containerElement);
                     x = MathUtils.clamp(x, contentRect.left, contentRect.right);
                     y = MathUtils.clamp(y, contentRect.top, contentRect.bottom);
                     // TODO optimize so that we don't go through EVERY span and so that
@@ -134,95 +115,199 @@ var TextRight;
                     return cursor;
                 };
                 /**
-                 * Insert text into the document at the specified location
+                 * Inserts text at the cursor location.
+                 * @param {DocumentCursor} cursor The location at which the text should be inserted.
+                 * @param {string} text The text that should be inserted into the document.
+                 * @return a cursor representing the end of the content.
+                 *
+                 * @remarks Blocks will automatically be created if newlines are contained within
+                 *                 the text.  if this is not desired, remove newlines from the given text.
                  */
                 DocumentModel.prototype.insertText = function (cursor, text) {
-                    // TODO fix and try to actually implement this
-                    if (cursor != null) {
-                        return Internal.EditDocument.insertText(cursor, text);
-                    }
                     // TODO check if we already inserted text elsewhere
                     // TODO handle newlines
-                    var event = new InsertTextEvent();
-                    event.timeStart = DateUtils.timestamp;
-                    event.timeEnd = DateUtils.timestamp;
-                    event.text = text;
-                    return Internal.EditDocument.insertText(cursor, text);
+                    return this.insertTextAtCursor(cursor, text);
+                };
+                DocumentModel.prototype.insertTextAtCursor = function (cursor, text) {
+                    cursor = cursor.clone();
+                    var fragment = document.createDocumentFragment();
+                    var fragments = [fragment];
+                    text.split("").forEach(function (part) {
+                        if (part === carriageReturn)
+                            return;
+                        if (part === newline) {
+                            fragment = document.createDocumentFragment();
+                            fragments.push(fragment);
+                            return;
+                        }
+                        var span = document.createTextNode(part);
+                        fragment.appendChild(span);
+                    });
+                    // insert the current text
+                    this.addElementsToCursorAndAdvance(cursor, fragments[0]);
+                    for (var i = 1; i < fragments.length; i++) {
+                        this.splitBlock(cursor);
+                        cursor.moveForward();
+                        this.addElementsToCursorAndAdvance(cursor, fragments[i]);
+                    }
+                    return cursor;
+                };
+                /**
+                 * Removes the content between start and end
+                 * @param {DocumentCursor} start the start of the content to remove
+                 * @param {DocumentCursor} end the end of the content to remove
+                 * @return a location representing the resulting location of the cursor
+                 */
+                DocumentModel.prototype.removeBetween = function (start, end) {
+                    // TODO implement
+                    return null;
+                };
+                /**
+                 * Merge the contents of two blocks.
+                 * @param {BlockItem} mergeInto The block to merge the blockToMerge into.
+                 * @param {BlockItem} blockToMerge The block to merge into mergeInto.
+                 * @return A DocumentCursor pointing to what used to be the beginning of mergeInto block.
+                 */
+                DocumentModel.prototype.mergeBlocks = function (mergeInto, blockToMerge) {
+                    this.cache.invalidateIndicesBefore(mergeInto);
+                    if (blockToMerge.isEmpty) {
+                        // we're merging in an empty block, so just remove the block
+                        this.removeBlock(blockToMerge);
+                        return mergeInto.end;
+                    }
+                    var wasMergeIntoBlockEmpty = mergeInto.isEmpty;
+                    var oldContent = this.removeBlock(blockToMerge);
+                    if (wasMergeIntoBlockEmpty) {
+                        this.appendToBlock(mergeInto, oldContent);
+                        return mergeInto.beginning;
+                    }
+                    var newCursor = mergeInto.end;
+                    newCursor.moveBackwardInBlock();
+                    this.appendToBlock(mergeInto, oldContent);
+                    newCursor.moveForward();
+                    return newCursor;
+                };
+                /**
+                 * Split the block pointed at by cursor into two blocks.  The content before the cursor
+                 * will be its own block and the content after the cursor will be its own block.
+                 *
+                 * @note The cursor will be updated to point to the end of the block that contains the
+                 * content before the cursor.
+                 * @param {DocumentCursor} cursor The cursor whose position determines the split point.
+                 */
+                DocumentModel.prototype.splitBlock = function (cursor) {
+                    var newBlock = Internal.BlockItem.createNewBlock();
+                    this.cache.invalidateIndicesBefore(cursor.block);
+                    // simple: add a blank paragraph before
+                    if (cursor.isBeginningOfBlock) {
+                        // We're at the beginning of the block, so let's make this simple and just add a
+                        // blank paragraph before the current block.
+                        this.insertBlockBefore(cursor.block, newBlock);
+                        // don't forget to fix up the cursor to point to the end of the "new content" which is
+                        // just the blank paragraph
+                        cursor.moveToEndOf(newBlock);
+                        return;
+                    }
+                    // simple: add a blank paragraph after
+                    if (cursor.isEndOfBlock) {
+                        this.insertBlockAfter(cursor.block, newBlock);
+                        return;
+                    }
+                    // complex: need to extract the contents from inside the block
+                    var range = document.createRange();
+                    // If we're at the end of a span, its better to start the selection by selecting the
+                    // entirety of the next span, otherwise we'll end up with an empty span, which we do
+                    // not allow.  If we're not at the end of a span, it means we're in the middle of one
+                    // so just start the selection and the current text node and let the
+                    // Range.extractContents() do the magic of extracting the correct hierarchy of
+                    // elements.
+                    var startSelection = cursor.isEndOfSpan ? cursor.spanElement.nextSibling : cursor.nextNode;
+                    range.setStartBefore(startSelection);
+                    range.setEndAfter(cursor.block.lastContentSpan);
+                    var contentOfNewBlock = range.extractContents();
+                    this.appendToBlock(newBlock, contentOfNewBlock);
+                    this.insertBlockAfter(cursor.block, newBlock);
+                    range.detach();
+                    // potentially, the text node that we once held in the cursor is no longer in the same
+                    // span, so be sure to fix it up before returning
+                    if (cursor.textNode != null) {
+                        cursor.setTo(cursor.block, cursor.textNode.parentNode, cursor.textNode);
+                    }
+                };
+                /**
+                 * Add the given fragment to the end of the given block
+                 * @param block the block to which to append content
+                 * @param fragment the fragment to append
+                 */
+                DocumentModel.prototype.appendToBlock = function (block, fragment) {
+                    var lastContent = block.lastContentSpan;
+                    // we CANNOT allow empty spans, so remove the existing empty span if it exists
+                    if (block.isEmpty) {
+                        block.contentElement.removeChild(block.firstContentSpan);
+                    }
+                    block.contentElement.insertBefore(fragment, block.contentElement.lastElementChild);
+                    var nextSpan = lastContent.nextElementSibling;
+                    // Note don't worry if we removed this element, that just means nextElementSibiling
+                    // will be null.
+                    if (nextSpan != null && lastContent.className === nextSpan.className) {
+                        // the spans have the same "style" so combine them
+                        lastContent.appendChild(HtmlUtils.convertToFragment(nextSpan));
+                        // the element is now empty so we remove it
+                        nextSpan.parentElement.removeChild(nextSpan);
+                    }
+                };
+                /**
+                 * Removes the block from the document, returning the content (without indicators) of
+                 * the block.
+                 */
+                DocumentModel.prototype.removeBlock = function (blockToRemove) {
+                    var fragment = HtmlUtils.convertToFragment(blockToRemove.contentElement);
+                    fragment.removeChild(fragment.firstChild);
+                    fragment.removeChild(fragment.lastChild);
+                    HtmlUtils.removeElement(blockToRemove.containerElement);
+                    return fragment;
+                };
+                /**
+                  * Add elements to the position pointed to by cursor, and move the cursor forward so
+                  * that it points after the newly inserted content.
+                  */
+                DocumentModel.prototype.addElementsToCursorAndAdvance = function (cursor, fragment) {
+                    // TODO, remove cursor if possible
+                    var clone = cursor.clone();
+                    var isAtEnd = !clone.moveForwardInBlock();
+                    cursor.add(fragment);
+                    if (isAtEnd) {
+                        cursor.moveToEndOf(cursor.block);
+                    }
+                    else {
+                        clone.moveBackwards();
+                        cursor.cloneFrom(clone);
+                    }
+                };
+                /**
+                 * Insert a block following the current block.
+                 * @param {BlockItem} currentBlock  The block that becomes the previous sibling to the inserted
+                 *                                  block.
+                 * @param {BlockItem} newBlock The new block inserted after currentBlock.
+                 */
+                DocumentModel.prototype.insertBlockAfter = function (currentBlock, newBlock) {
+                    if (currentBlock == null)
+                        throw "currentBlock cannot be null";
+                    if (newBlock == null)
+                        throw "newBlock cannot be null";
+                    currentBlock.containerElement.parentElement.insertBefore(newBlock.containerElement, currentBlock.nextContainer);
+                };
+                /**
+                 * Insert a block before the current block.
+                 *
+                 * @note simple method but implemented for readability
+                 */
+                DocumentModel.prototype.insertBlockBefore = function (blockItem, newBlock) {
+                    blockItem.containerElement.parentElement.insertBefore(newBlock.containerElement, blockItem.containerElement);
                 };
                 return DocumentModel;
             })();
             Internal.DocumentModel = DocumentModel;
-            var UndoStackNode = (function () {
-                function UndoStackNode(event, previous) {
-                    this.event = event;
-                    this.previous = previous;
-                }
-                return UndoStackNode;
-            })();
-            var UndoStack = (function () {
-                function UndoStack() {
-                }
-                Object.defineProperty(UndoStack.prototype, "isEmpty", {
-                    get: function () {
-                        return this.last == null;
-                    },
-                    enumerable: true,
-                    configurable: true
-                });
-                UndoStack.prototype.push = function (event) {
-                    this.last = new UndoStackNode(this.last, event);
-                };
-                UndoStack.prototype.peek = function () {
-                    return this.last.event;
-                };
-                return UndoStack;
-            })();
-            Internal.UndoStack = UndoStack;
-            var DateUtils = (function () {
-                function DateUtils() {
-                }
-                Object.defineProperty(DateUtils, "timestamp", {
-                    get: function () {
-                        return Date.now();
-                    },
-                    enumerable: true,
-                    configurable: true
-                });
-                return DateUtils;
-            })();
-            Internal.DateUtils = DateUtils;
-            var UndoEvent = (function () {
-                function UndoEvent() {
-                }
-                return UndoEvent;
-            })();
-            Internal.UndoEvent = UndoEvent;
-            var InsertTextEvent = (function () {
-                function InsertTextEvent() {
-                }
-                return InsertTextEvent;
-            })();
-            /**
-             * Indicates the number of times something has changed.
-             */
-            var ChangeCount = (function () {
-                function ChangeCount() {
-                    this.value = 0;
-                }
-                Object.defineProperty(ChangeCount.prototype, "current", {
-                    get: function () {
-                        return this.value;
-                    },
-                    enumerable: true,
-                    configurable: true
-                });
-                ChangeCount.prototype.increment = function () {
-                    this.value++;
-                    return this.value;
-                };
-                return ChangeCount;
-            })();
-            Internal.ChangeCount = ChangeCount;
         })(Internal = Editor.Internal || (Editor.Internal = {}));
     })(Editor = TextRight.Editor || (TextRight.Editor = {}));
 })(TextRight || (TextRight = {}));

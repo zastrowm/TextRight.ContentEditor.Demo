@@ -2,6 +2,7 @@ var TextRight;
 (function (TextRight) {
     var Utils;
     (function (Utils) {
+        var Rect = TextRight.Editor.Internal.Rect;
         /**
          * Math related utility functions
          */
@@ -114,19 +115,30 @@ var TextRight;
                 return contents;
             };
             /**
-             * Get the position of a single node
+             * Convert a ClientRect into a Rect, taking into account the windows current
+             * scroll position.
+             */
+            HtmlUtils.fromClientRect = function (rect) {
+                return new Rect(rect.top + window.pageYOffset, rect.left + window.pageXOffset, rect.height, rect.width);
+            };
+            /**
+             * Gets the box outline of the given element, in page coordinates
+             */
+            HtmlUtils.getBoundingClientRectOfElement = function (element) {
+                return HtmlUtils.fromClientRect(element.getBoundingClientRect());
+            };
+            /**
+             * Get the position of a single node, in page coordinates
              */
             HtmlUtils.getBoundingClientRectOf = function (node) {
                 // elements have a much more optimized method of getting the size:
                 if (node instanceof Element) {
-                    var element = node;
-                    return element.getBoundingClientRect();
+                    return this.getBoundingClientRectOfElement(node);
                 }
-                var range = document.createRange();
+                var range = HtmlUtils.cachedRange;
                 range.selectNode(node);
                 var rect = range.getBoundingClientRect();
-                range.detach();
-                return rect;
+                return HtmlUtils.fromClientRect(rect);
             };
             /**
              * Remove the given element from its parent collection
@@ -135,14 +147,15 @@ var TextRight;
                 element.parentElement.removeChild(element);
             };
             /**
-             * Set the top/left/height/width of an element, first applying a top/left offset
+             * Set the top/left/height/width of an element
              */
-            HtmlUtils.positionElementWithOffset = function (element, offset, top, left, height, width) {
-                element.style.top = (top + offset.top) + "px";
-                element.style.left = (left + offset.left) + "px";
+            HtmlUtils.positionElement = function (element, top, left, height, width) {
+                element.style.top = (top) + "px";
+                element.style.left = (left) + "px";
                 element.style.height = (height) + "px";
                 element.style.width = (width) + "px";
             };
+            HtmlUtils.cachedRange = document.createRange();
             return HtmlUtils;
         })();
         Utils.HtmlUtils = HtmlUtils;
